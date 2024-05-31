@@ -1,0 +1,280 @@
+---
+title: "dieselPM_TSSTcort_CDI"
+author: "Jessica Uy"
+date: '2024-05-20'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## load libraries
+```{r}
+library(dplyr)
+library(readxl)
+library(tidyverse)
+library(psych)
+library(quest)
+library(lme4)
+library(naniar)
+library(corrplot)
+library(ggplot2)
+library(sjPlot)
+library(car)
+```
+
+## load files
+```{r}
+dieselcort <- read_csv("dieselPM_TSSTcort_pub.csv")
+cort_compare <- read_csv("ELS_cort_compare_pub.csv")
+```
+
+## winsorize cort data exceeding 2SD
+```{r}
+dieselcort_win <-
+  dieselcort %>%
+  mutate(CVS1_winsorized_2sd = quest::winsor(dieselcort$CVS1, z.max = 2, rtn.int = FALSE, to.na = FALSE)) %>%
+  mutate(CVS2_winsorized_2sd = quest::winsor(dieselcort$CVS2, z.max = 2, rtn.int = FALSE, to.na = FALSE)) %>%
+  mutate(CVS3_winsorized_2sd = quest::winsor(dieselcort$CVS3, z.max = 2, rtn.int = FALSE, to.na = FALSE)) %>%
+  mutate(CVS4_winsorized_2sd = quest::winsor(dieselcort$CVS4, z.max = 2, rtn.int = FALSE, to.na = FALSE)) %>%
+  mutate(CVS5_winsorized_2sd = quest::winsor(dieselcort$CVS5, z.max = 2, rtn.int = FALSE, to.na = FALSE))
+  
+```
+
+## calculate AUCg
+based on formula from Pruessner et al. (2003)
+```{r}
+dieselcort_win_AUC <-
+  dieselcort_win %>%
+  # AUCg_2to4 = cortisol reactivity
+   mutate(AUCg_2to4 = ((CVS2_winsorized_2sd + CVS3_winsorized_2sd)*TDM.S2.S3)/2 + ((CVS3_winsorized_2sd + CVS4_winsorized_2sd)*TDM.S3.S4)/2) %>%
+  # AUCg_4to5 = cortisol recovery
+   mutate(AUCg_4to5 = ((CVS4_winsorized_2sd + CVS5_winsorized_2sd)*TDM.S4.S5)/2)
+```
+
+## calculate composites
+- neighborhood socioeconomic status indicators were z-scored and averaged to create the neighborhood socioeconomic disadvantage composite
+- parent education and household income were z-scored and averaged to create a household SES composite and multiplied by -1
+- diesel PM percentiles from CalEnviroScreen (CES) 3.0 and 4.0 were z-scored and averaged
+- PM2.5 percentiles from CES 3.0 and 4.0 were z-scored and averaged
+
+```{r}
+dieselcort_win_AUC_SES <-
+   dieselcort_win_AUC %>%
+  mutate(poverty_pctl_zscore = (poverty_pctl - mean(poverty_pctl,na.rm=T))/sd(poverty_pctl, na.rm=T)) %>%
+  mutate(unemployment_pctl_zscore = (unemployment_pctl - mean(unemployment_pctl, na.rm=T))/sd(unemployment_pctl, na.rm=T)) %>%
+  mutate(housing_burden_pctl_zscore = (housing_burden_pctl - mean(housing_burden_pctl, na.rm=T))/sd(housing_burden_pctl, na.rm=T)) %>%
+  mutate(education_pctl_zscore = (education_pctl - mean(education_pctl, na.rm=T))/sd(education_pctl, na.rm=T)) %>%
+  mutate(neighborhood_SES = (poverty_pctl_zscore + unemployment_pctl_zscore + housing_burden_pctl_zscore + education_pctl_zscore)/4) %>%
+  mutate(parent_education_zscore = (Parent_Education - mean(Parent_Education,na.rm=T))/sd(Parent_Education, na.rm=T)) %>%
+  mutate(parent_income_zscore = (Parent_Income - mean(Parent_Income, na.rm=T))/sd(Parent_Income, na.rm=T)) %>%
+  mutate(family_SES = (parent_education_zscore + parent_income_zscore)/2) %>%
+  mutate(family_SES_reverse = -1*family_SES) %>%
+  mutate(diesel_ces3_zscore = (diesel_PM_pctl - mean(diesel_PM_pctl, na.rm=T))/sd(diesel_PM_pctl, na.rm=T)) %>%
+  mutate(diesel_ces4_zscore = (diesel_PM_pctl_4 - mean(diesel_PM_pctl_4, na.rm=T))/sd(diesel_PM_pctl_4, na.rm=T)) %>%
+  mutate(diesel_PM_pctl_z = (diesel_ces3_zscore + diesel_ces4_zscore)/2) %>% 
+  mutate(PM2.5_pctl_zscore = (PM2.5_pctl - mean(PM2.5_pctl, na.rm=T))/sd(PM2.5_pctl, na.rm=T)) %>%
+  mutate(PM2.5_pctl_zscore_4 = (PM2.5_pctl_4 - mean(PM2.5_pctl_4, na.rm=T))/sd(PM2.5_pctl_4, na.rm=T)) %>%
+  mutate(PM2.5_pctlavg_z = (PM2.5_pctl_zscore + PM2.5_pctl_zscore_4)/2)
+```
+
+## correlation table
+```{r}
+dieselcort_win_AUC_SES_corr <-
+  dieselcort_win_AUC_SES %>%
+  select(Age, Tanner_Score,family_SES_reverse, neighborhood_SES, diesel_PM_pctl_z, AUCg_2to4, AUCg_4to5, CDI_total, PM2.5_pctlavg_z, MASC_total, YSR_Ext_Problems_Total)
+
+corPlot(dieselcort_win_AUC_SES_corr,
+        numbers=TRUE,
+        main = "",
+        stars=TRUE,
+        show.legend=TRUE,
+        diag=FALSE,
+        upper=FALSE,
+        xlas=2,
+        cex.axis = 0.5,
+        cex = 0.5)
+```
+
+## linear regressions
+```{r}
+diesel_CDI <- lm(CDI_total ~ diesel_PM_pctl_z + Age + Sex + Tanner_Score + batch + family_SES_reverse + neighborhood_SES, data=dieselcort_win_AUC_SES)
+summary(diesel_CDI)
+tab_model(diesel_CDI)
+
+# convert t values to Cohen's d values for CDI_total ~ diesel_PM_pctl_z
+t_to_d(t = 2.004, df_error = 150)
+
+diesel_AUCg2to4 <- lm(AUCg_2to4 ~ diesel_PM_pctl_z + Age + Sex + Tanner_Score + batch + family_SES_reverse + neighborhood_SES, data=dieselcort_win_AUC_SES)
+summary(diesel_AUCg2to4)
+tab_model(diesel_AUCg2to4)
+
+# convert t values to Cohen's d values for AUCg_2to4 (reactivity) ~ diesel_PM_pctl_z
+t_to_d(t = -2.406, df_error = 147)
+
+diesel_AUCg4to5 <- lm(AUCg_4to5 ~ diesel_PM_pctl_z + Age + Sex + Tanner_Score + batch + family_SES_reverse + neighborhood_SES, data=dieselcort_win_AUC_SES)
+summary(diesel_AUCg4to5)
+tab_model(diesel_AUCg4to5)
+
+# convert t values to Cohen's d values for AUCg_4to5 (recovery) ~ diesel_PM_pctl_z
+t_to_d(t = -1.805, df_error = 149)
+
+AUCg2to4_CDI <- lm(CDI_total ~ AUCg_2to4 + diesel_PM_pctl_z + Age + Sex + Tanner_Score + batch + family_SES_reverse + neighborhood_SES, data=dieselcort_win_AUC_SES)
+summary(AUCg2to4_CDI)
+tab_model(AUCg2to4_CDI)
+
+# convert t values to Cohen's d values for CDI_total ~ AUCg reactivity
+t_to_d(t = -2.05, df_error = 146)
+
+AUCg4to5_CDI <- lm(CDI_total ~ AUCg_4to5 + diesel_PM_pctl_z + Age + Sex + Tanner_Score + batch + family_SES_reverse + neighborhood_SES, data=dieselcort_win_AUC_SES)
+summary(AUCg4to5_CDI)
+tab_model(AUCg4to5_CDI)
+```
+
+## mediation analysis: diesel PM --> AUCg Reactivity --> CDI total
+run process.R to use process function
+```{r}
+process(data=dieselcort_win_AUC_SES, y="CDI_total", x="diesel_PM_pctl_z", m=c("AUCg_2to4"), cov=c("Age", "Sex", "neighborhood_SES", "family_SES_reverse", "Tanner_Score", "batch"), model=4, seed=100770, conf=95, intprobe=1)
+```
+
+## set up plot theme
+```{r}
+set_theme(
+  geom.outline.color = "black", 
+  geom.outline.size = 1, 
+  geom.label.size = 2,
+  geom.label.color = "black",
+  title.color = "black", 
+  title.size = 1.5, 
+  axis.angle.x = 0, 
+  axis.textcolor = "black", 
+  base = theme_bw()
+)
+```
+
+## create plots for mediation scatterplots
+```{r}
+plot_model(diesel_AUCg2to4,
+           type = "pred",
+           terms = c("diesel_PM_pctl_z"),
+           colors = c("black", "black"),
+           show.data = TRUE,
+           dot.size = 3,
+          jitter = 0.3,
+           show.p = TRUE) +
+    labs(title = "", 
+        x = "Diesel PM Percentile (Standardized Average)", 
+        y = "Cortisol Reactivity (AUCg)")
+
+plot_model(AUCg2to4_CDI,
+           type = "pred",
+           terms = c("AUCg_2to4"),
+           colors = c("black", "black"),
+           show.data = TRUE,
+           dot.size = 3,
+          jitter = 0.3,
+           show.p = TRUE) +
+    labs(title = "", 
+        x = "Cortisol Reactivity (AUCg)", 
+        y = "Depressive Symptoms")
+```
+
+## supplemental analyses cort samples
+```{r}
+diesel_S2 <- lm(CVS2_winsorized_2sd ~ diesel_PM_pctl_z + Age + Sex + Tanner_Score + batch + family_SES_reverse + neighborhood_SES, data=dieselcort_win_AUC_SES)
+summary(diesel_S2)
+tab_model(diesel_S2)
+t_to_d(t = -1.765, df_error = 151)
+
+diesel_S3 <- lm(CVS3_winsorized_2sd ~ diesel_PM_pctl_z + Age + Sex + Tanner_Score + batch + family_SES_reverse + neighborhood_SES, data=dieselcort_win_AUC_SES)
+summary(diesel_S3)
+tab_model(diesel_S3)
+t_to_d(t = -2.263, df_error = 151)
+
+diesel_S4 <- lm(CVS4_winsorized_2sd ~ diesel_PM_pctl_z + Age + Sex + Tanner_Score + batch + family_SES_reverse + neighborhood_SES, data=dieselcort_win_AUC_SES)
+summary(diesel_S4)
+tab_model(diesel_S4)
+t_to_d(t = -1.243, df_error = 150)
+
+diesel_S5 <- lm(CVS5_winsorized_2sd ~ diesel_PM_pctl_z + Age + Sex + Tanner_Score + batch + family_SES_reverse + neighborhood_SES, data=dieselcort_win_AUC_SES)
+summary(diesel_S5)
+tab_model(diesel_S5)
+t_to_d(t = -1.458, df_error = 150)
+
+```
+
+## calculate predicted cort values per sample at high (+1SD) and low (-1SD) of diesel PM percentile
+graph of predicted cort values and SE for each saliva sample at high and low levels of diesel PM percentile were plotted using Excel
+```{r}
+newdata <- data.frame(diesel_PM_pctl_z=c(-0.9, 0, 0.90), # 1SD = 0.9
+Age=c(12.26112, 12.26112, 12.26112), # mean age
+Sex=c(1.564706, 1.564706, 1.564706), # mean sex
+Tanner_Score=c(2.7, 2.7, 2.7), # mean Tanner
+neighborhood_SES=c(-0.00854691, -0.00854691, -0.00854691), # mean neighborhood SES
+batch=c(0.5352941, 0.5352941, 0.5352941), # mean batch
+family_SES_reverse=c(0, 0, 0)) # mean household SES
+
+predict(diesel_S2, newdata, se.fit=TRUE) # obtain predicted cort values and SE for S2
+predict(diesel_S3, newdata, se.fit=TRUE) # obtain predicted cort values and SE for S3
+predict(diesel_S4, newdata, se.fit=TRUE) # obtain predicted cort values and SE for S4
+predict(diesel_S5, newdata, se.fit=TRUE) # obtain predicted cort values and SE for S5
+```
+
+## specificity analyses
+```{r}
+## diesel PM --> CDI --> AUCg reactivity
+process(data=dieselcort_win_AUC_SES, y="AUCg_2to4", x="diesel_PM_pctl_z", m=c("CDI_total"), cov=c("Age", "Sex", "neighborhood_SES", "family_SES_reverse", "Tanner_Score", "batch"), model=4, seed=100770, conf=95, intprobe=1)
+
+## diesel PM --> AUCg reactivity --> MASC
+process(data=dieselcort_win_AUC_SES, y="MASC_total", x="diesel_PM_pctl_z", m=c("AUCg_2to4"), cov=c("Age", "Sex", "neighborhood_SES", "family_SES_reverse", "Tanner_Score", "batch"), model=4, seed=100770, conf=95, intprobe=1)
+
+## diesel PM --> AUCg reactivity --> YSR externalizing
+process(data=dieselcort_win_AUC_SES, y="YSR_Ext_Problems_Total", x="diesel_PM_pctl_z", m=c("AUCg_2to4"), cov=c("Age", "Sex", "neighborhood_SES", "family_SES_reverse", "Tanner_Score", "batch"), model=4, seed=100770, conf=95, intprobe=1)
+
+process(data=dieselcort_win_AUC_SES, y="CDI_total", x="PM2.5_pctlavg_z", m=c("AUCg_2to4"), cov=c("Age", "Sex", "neighborhood_SES", "family_SES_reverse", "Tanner_Score", "batch"), model=4, seed=100770, conf=95, intprobe=1)
+```
+
+## comparison of baseline demographic data between individuals who did not do TSST vs. those who did
+```{r}
+nocort <-
+  cort_compare %>%
+  filter(has_cort==0)
+
+yescort <-
+  cort_compare %>%
+  filter(has_cort==1)
+
+# get descriptives
+nocort_desc <- psych::describe(nocort)
+yescort_desc <- psych:: describe(yescort)
+
+# t-tests
+t.test(Tanner_Average_T1 ~ has_cort, data = cort_compare)
+
+t.test(Age_T1 ~ has_cort, data = cort_compare)
+
+t.test(Parent_Education_T1 ~ has_cort, data = cort_compare)
+
+t.test(Parent_Income_T1 ~ has_cort, data = cort_compare)
+
+t.test(CDI_total_T1 ~ has_cort, data=cort_compare)
+
+t.test(PM2.5_pctl ~ has_cort, data=cort_compare)
+
+t.test(diesel_PM_pctl ~ has_cort, data=cort_compare)
+
+t.test(education_pctl ~ has_cort, data=cort_compare)
+
+t.test(poverty_pctl ~ has_cort, data=cort_compare)
+
+t.test(unemployment_pctl ~ has_cort, data=cort_compare)
+
+t.test(housing_burden_pctl ~ has_cort, data=cort_compare)
+
+chisq.test(cort_compare$Sex, cort_compare$has_cort)
+
+chisq.test(cort_compare$Race, cort_compare$has_cort)
+
+```
+
